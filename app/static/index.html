@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CKAD Lab</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/vendor/xterm.css">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="top">
+  <strong class="brand">CKAD Lab</strong>
+  <span id="timer" class="timer" hidden></span>
+  <span class="spacer"></span>
+  <a class="btn ghost" href="https://kubernetes.io/docs/" target="_blank" rel="noopener">Docs k8s.io ↗</a>
+  <button id="finish" class="btn danger" hidden>Finish and grade</button>
+</header>
+
+<div id="banner" class="banner" role="alert" hidden></div>
+
+<main>
+  <section id="view-start" class="center" hidden>
+    <div class="card">
+      <h1>CKAD practice exam</h1>
+      <p class="muted">Pick a domain and how many questions you want. Each session spins up a Kubernetes cluster
+        of its own, with a terminal in the browser.</p>
+      <label>Domain
+        <select id="domain"></select>
+      </label>
+      <label>Number of questions
+        <input id="count" type="number" min="1" value="3">
+      </label>
+      <button id="start" class="btn primary">Start session</button>
+      <p id="start-msg" class="msg" role="status"></p>
+    </div>
+  </section>
+
+  <section id="view-wait" class="center" hidden>
+    <div class="card">
+      <div class="spinner" aria-hidden="true"></div>
+      <h1>Preparing the environment…</h1>
+      <p id="wait-step" class="muted" role="status"></p>
+      <button id="cancel" class="btn ghost">Cancel</button>
+    </div>
+  </section>
+
+  <section id="view-exam" hidden>
+    <div class="exam">
+      <aside class="questions">
+        <div id="review" class="review" hidden></div>
+        <nav id="qnav" class="qnav" aria-label="Questions"></nav>
+        <article id="qbody" class="qbody"></article>
+      </aside>
+      <div class="termwrap">
+        <div id="terminal"></div>
+        <div id="term-overlay" class="overlay" hidden>
+          <span id="term-overlay-msg"></span>
+          <button id="reconnect" class="btn primary">Reconnect</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="view-result" class="result-wrap" hidden>
+    <div id="result"></div>
+  </section>
+</main>
+
+<script src="/vendor/xterm.js"></script>
+<script src="/vendor/addon-fit.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>

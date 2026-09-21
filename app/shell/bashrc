@@ -1,0 +1,14 @@
+# Simulator environment, similar to the real exam.
+case $- in *i*) ;; *) return ;; esac
+
+export EDITOR=vim
+export do="--dry-run=client -o yaml"
+export now="--force --grace-period 0"
+alias k=kubectl
+
+source /usr/share/bash-completion/bash_completion
+source <(kubectl completion bash)
+complete -o default -F __start_kubectl k
+
+HISTSIZE=5000
+PS1='\[\e[1;32m\]exam\[\e[0m\]:\[\e[1;34m\]\w\[\e[0m\]\$ '
