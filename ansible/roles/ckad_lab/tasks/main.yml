@@ -1,0 +1,143 @@
+---
+- name: Install kind (checksum verified)
+  ansible.builtin.get_url:
+    url: "https://github.com/kubernetes-sigs/kind/releases/download/{{ kind_version }}/kind-linux-amd64"
+    checksum: "sha256:https://github.com/kubernetes-sigs/kind/releases/download/{{ kind_version }}/kind-linux-amd64.sha256sum"
+    dest: /usr/local/bin/kind
+    mode: "0755"
+
+- name: Install kubectl (checksum verified)
+  ansible.builtin.get_url:
+    url: "https://dl.k8s.io/release/{{ kubectl_version }}/bin/linux/amd64/kubectl"
+    checksum: "sha256:https://dl.k8s.io/release/{{ kubectl_version }}/bin/linux/amd64/kubectl.sha256"
+    dest: /usr/local/bin/kubectl
+    mode: "0755"
+
+# ---- egress filter for the service account ------------------------------------------------
+# Student pods egress through the ckad user's network stack, so this is where we can stop the
+# server from being used as a spam relay / scanner / miner or to reach private networks.
+- name: Egress filter rules
+  ansible.builtin.template:
+    src: egress.nft.j2
+    dest: /etc/ckad-egress.nft
+    mode: "0644"
+  notify: Reload egress
+
+- name: Egress filter unit
+  ansible.builtin.template:
+    src: ckad-egress.service.j2
+    dest: /etc/systemd/system/ckad-egress.service
+    mode: "0644"
+  notify: Reload systemd
+
+- name: Load the egress filter before anything creates a cluster
+  ansible.builtin.systemd:
+    name: ckad-egress
+    enabled: true
+    state: started
+    daemon_reload: true
+
+# ---- application code: root-owned, read-only for the service ------------------------------
+- name: Application and data directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.owner }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ ckad_app_dir }}", owner: root, mode: "0755"}
+    - {path: "{{ ckad_data_dir }}", owner: "{{ ckad_user }}", mode: "0700"}
+
+- name: Copy the application from this checkout (no git credentials ever reach the server)
+  ansible.posix.synchronize:
+    src: "{{ playbook_dir }}/../"
+    dest: "{{ ckad_app_dir }}/"
+    delete: true
+    owner: false
+    group: false
+    rsync_opts:
+      - "--exclude=.git"
+      - "--exclude=.venv"
+      - "--exclude=data"
+      - "--exclude=ansible"
+      - "--exclude=__pycache__"
+      - "--exclude=.kubeconfig"
+  notify: Restart ckad-lab
+
+- name: Code is owned by root
+  ansible.builtin.file:
+    path: "{{ ckad_app_dir }}"
+    owner: root
+    group: root
+    mode: "u=rwX,go=rX"
+    recurse: true
+
+- name: Data/ points at the writable directory
+  ansible.builtin.file:
+    src: "{{ ckad_data_dir }}"
+    dest: "{{ ckad_app_dir }}/data"
+    state: link
+
+- name: Python virtualenv with the app requirements
+  ansible.builtin.pip:
+    requirements: "{{ ckad_app_dir }}/requirements.txt"
+    virtualenv: "{{ ckad_app_dir }}/.venv"
+    virtualenv_command: python3 -m venv
+  notify: Restart ckad-lab
+
+# ---- prove rootless kind works (this also pre-pulls the node image) -----------------------------
+- name: Smoke test - create and delete a real kind cluster as {{ ckad_user }}
+  when: ckad_smoke_test | bool
+  become: true
+  become_user: "{{ ckad_user }}"
+  environment: "{{ rootless_env }}"
+  block:
+    - name: Kind create cluster
+      ansible.builtin.command: >-
+        kind create cluster --name ckad-smoke --wait 180s
+        --kubeconfig {{ ckad_data_dir }}/smoke.kubeconfig
+      changed_when: false
+    - name: Kubectl can see the node
+      ansible.builtin.command: kubectl --kubeconfig {{ ckad_data_dir }}/smoke.kubeconfig get nodes
+      changed_when: false
+  always:
+    - name: Kind delete cluster
+      ansible.builtin.shell: |
+        kind delete cluster --name ckad-smoke --kubeconfig {{ ckad_data_dir }}/smoke.kubeconfig
+        rm -f {{ ckad_data_dir }}/smoke.kubeconfig
+      changed_when: false
+
+- name: Build the student shell image
+  ansible.builtin.shell: |
+    docker image inspect ckad-lab-shell >/dev/null 2>&1 && exit 0
+    docker build -q -t ckad-lab-shell {{ ckad_app_dir }}/app/shell && echo built
+  become: true
+  become_user: "{{ ckad_user }}"
+  environment: "{{ rootless_env }}"
+  register: ckad_lab_shell_image
+  changed_when: "'built' in ckad_lab_shell_image.stdout"
+
+# ---- the service ---------------------------------------------------------------------------
+- name: Systemd unit
+  ansible.builtin.template:
+    src: ckad-lab.service.j2
+    dest: /etc/systemd/system/ckad-lab.service
+    mode: "0644"
+  notify: [Reload systemd, Restart ckad-lab]
+
+- name: Enable and start CKAD Lab
+  ansible.builtin.systemd:
+    name: ckad-lab
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Wait until the application answers (on loopback)
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8000/api/catalog
+    status_code: 200
+  register: ckad_lab_app_up
+  retries: 20
+  delay: 3
+  until: ckad_lab_app_up.status == 200

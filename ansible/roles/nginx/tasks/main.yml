@@ -1,0 +1,65 @@
+---
+- name: Install nginx and the tools to manage its password file
+  ansible.builtin.apt:
+    name: [nginx, python3-passlib]
+    state: present
+
+- name: Remove the default site (it would also claim default_server)
+  ansible.builtin.file:
+    path: /etc/nginx/sites-enabled/default
+    state: absent
+  notify: Reload nginx
+
+- name: Basic-auth password file
+  community.general.htpasswd:
+    path: /etc/nginx/ckad-lab.htpasswd
+    name: "{{ ckad_basic_auth_user }}"
+    password: "{{ ckad_basic_auth_password }}"
+    owner: root
+    group: www-data
+    mode: "0640"
+  no_log: true
+  notify: Reload nginx
+
+- name: Shared proxy settings (the app only listens on loopback)
+  ansible.builtin.copy:
+    dest: /etc/nginx/ckad-proxy.conf
+    mode: "0644"
+    content: |
+      proxy_pass http://127.0.0.1:8000;
+      proxy_http_version 1.1;
+      # the app compares the browser's Origin with the Host header, so pass Host through untouched
+      proxy_set_header Host $http_host;
+      proxy_set_header Upgrade $http_upgrade;
+      proxy_set_header Connection $ckad_connection_upgrade;
+      proxy_set_header X-Real-IP $remote_addr;
+  notify: Reload nginx
+
+- name: Reverse proxy configuration (validated, and removed again if nginx rejects it)
+  block:
+    - name: Write the site
+      ansible.builtin.template:
+        src: ckad-lab.conf.j2
+        dest: /etc/nginx/conf.d/ckad-lab.conf
+        mode: "0644"
+      notify: Reload nginx
+    - name: Check the nginx configuration
+      ansible.builtin.command: nginx -t
+      changed_when: false
+  rescue:
+    - name: Remove the rejected site
+      ansible.builtin.file:
+        path: /etc/nginx/conf.d/ckad-lab.conf
+        state: absent
+    - name: Stop here
+      ansible.builtin.fail:
+        msg: "nginx rejected the configuration; it was removed and the previous one keeps running."
+
+- name: Enable and start nginx
+  ansible.builtin.systemd:
+    name: nginx
+    enabled: true
+    state: started
+
+- name: Apply the nginx configuration now
+  ansible.builtin.meta: flush_handlers

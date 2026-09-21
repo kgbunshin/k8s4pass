@@ -1,0 +1,4 @@
+# Copy to vault.yml (git-ignored), set a long random password, then encrypt it:
+#   ansible-vault encrypt vault.yml
+# and run the playbooks with:  -e @vault.yml --ask-vault-pass
+vault_ckad_basic_auth_password: "change-me-to-a-long-random-string"

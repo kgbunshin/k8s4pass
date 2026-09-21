@@ -1,0 +1,100 @@
+---
+# Why rootless: kind nodes are privileged containers. With a rootful daemon, a student who
+# escapes one owns the host (root). With rootless Docker "privileged" only means privileged
+# inside a user namespace, so an escape lands as the unprivileged `{{ ckad_user }}` account.
+
+- name: Service account (no login shell, locked password, never allowed over SSH)
+  ansible.builtin.user:
+    name: "{{ ckad_user }}"
+    shell: /usr/sbin/nologin
+    create_home: true
+    password_lock: true
+  register: rootless_docker_account
+
+- name: Remember the uid  # noqa: var-naming[no-role-prefix]  (shared by every role and by group_vars)
+  ansible.builtin.set_fact:
+    ckad_uid: "{{ rootless_docker_account.uid }}"
+
+- name: The account needs subordinate uid/gid ranges for user namespaces
+  ansible.builtin.command: "grep -q '^{{ ckad_user }}:' /etc/{{ item }}"
+  loop: [subuid, subgid]
+  changed_when: false
+
+- name: Docker apt repository (the signing key is fetched and pinned to this repository only)
+  ansible.builtin.deb822_repository:
+    name: docker
+    types: [deb]
+    uris: https://download.docker.com/linux/debian
+    suites: ["{{ ansible_distribution_release }}"]
+    components: [stable]
+    architectures: [amd64]
+    signed_by: https://download.docker.com/linux/debian/gpg
+    state: present
+
+- name: Install Docker and the rootless prerequisites
+  ansible.builtin.apt:
+    name: [docker-ce, docker-ce-cli, docker-ce-rootless-extras, uidmap, dbus-user-session,
+           slirp4netns, fuse-overlayfs, iptables, kmod]
+    state: present
+    update_cache: true
+
+- name: Disable the rootful daemon so only the rootless one exists
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    enabled: false
+    masked: true
+    state: stopped
+  loop: [docker.service, docker.socket, containerd.service]
+
+- name: Kernel modules that rootless kind needs
+  community.general.modprobe:
+    name: "{{ item }}"
+    state: present
+    persistent: present
+  loop: [ip_tables, ip6_tables, iptable_nat, ip6table_nat]
+
+- name: Delegate cgroup controllers to user sessions (memory/cpu/pids limits for rootless containers)
+  ansible.builtin.template:
+    src: delegate.conf.j2
+    dest: /etc/systemd/system/user@.service.d/delegate.conf
+    mode: "0644"
+  notify: Reload systemd
+
+- name: Apply the delegation before the user manager starts
+  ansible.builtin.meta: flush_handlers
+
+- name: Keep the user manager (and the rootless daemon) running without a login
+  ansible.builtin.command: "loginctl enable-linger {{ ckad_user }}"
+  args:
+    creates: "/var/lib/systemd/linger/{{ ckad_user }}"
+
+- name: Wait for the user runtime directory and bus
+  ansible.builtin.wait_for:
+    path: "/run/user/{{ ckad_uid }}/bus"
+    timeout: 60
+
+- name: Install the rootless Docker daemon for {{ ckad_user }}
+  ansible.builtin.command: dockerd-rootless-setuptool.sh install
+  become: true
+  become_user: "{{ ckad_user }}"
+  environment: "{{ rootless_env }}"
+  args:
+    creates: "/home/{{ ckad_user }}/.config/systemd/user/docker.service"
+
+- name: Wait for the rootless Docker socket
+  ansible.builtin.wait_for:
+    path: "/run/user/{{ ckad_uid }}/docker.sock"
+    timeout: 60
+
+- name: Ask the daemon how it is running
+  ansible.builtin.command: docker info
+  become: true
+  become_user: "{{ ckad_user }}"
+  environment: "{{ rootless_env }}"
+  register: rootless_docker_info
+  changed_when: false
+
+- name: Confirm the daemon really is rootless
+  ansible.builtin.assert:
+    that: "'rootless' in rootless_docker_info.stdout | lower"
+    fail_msg: "docker info does not report rootless mode; refusing to continue with a rootful daemon"

@@ -1,0 +1,15 @@
+# Managed by Ansible
+[Unit]
+Description=Egress filter for the {{ ckad_user }} user
+Before=network-pre.target
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/ckad-egress.nft
+ExecReload=/usr/sbin/nft -f /etc/ckad-egress.nft
+ExecStop=/usr/sbin/nft delete table inet ckad_egress
+
+[Install]
+WantedBy=multi-user.target

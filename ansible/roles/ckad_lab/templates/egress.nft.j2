@@ -1,0 +1,18 @@
+# Managed by Ansible. Outbound policy for the {{ ckad_user }} user (the app and every student pod).
+table inet ckad_egress
+delete table inet ckad_egress
+table inet ckad_egress {
+  chain output {
+    type filter hook output priority filter; policy accept;
+    meta skuid != "{{ ckad_user }}" accept
+    oifname "lo" accept
+    udp dport 53 accept
+    tcp dport 53 accept
+    # never reach private, CGNAT or link-local networks (internal services, cloud metadata)
+    ip daddr { 10.0.0.0/8, 100.64.0.0/10, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16 } drop
+    ip6 daddr { fc00::/7, fe80::/10 } drop
+    # registries and docs are all the labs need; no SMTP, no mining pools on odd ports, no scanning
+    tcp dport { 80, 443 } accept
+    counter drop
+  }
+}

@@ -1,0 +1,47 @@
+# Managed by Ansible
+[Unit]
+Description=CKAD Lab (behind nginx, loopback only)
+After=network-online.target user@{{ ckad_uid }}.service ckad-egress.service
+Wants=network-online.target
+Requires=user@{{ ckad_uid }}.service
+
+[Service]
+User={{ ckad_user }}
+Group={{ ckad_user }}
+WorkingDirectory={{ ckad_app_dir }}
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=MAX_SESSIONS={{ ckad_max_sessions }}
+Environment=SESSION_MINUTES={{ ckad_session_minutes }}
+Environment=REVIEW_MINUTES={{ ckad_review_minutes }}
+Environment=XDG_RUNTIME_DIR=/run/user/{{ ckad_uid }}
+Environment=DOCKER_HOST=unix:///run/user/{{ ckad_uid }}/docker.sock
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+ExecStart={{ ckad_app_dir }}/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
+Restart=on-failure
+RestartSec=5
+# Shutdown tears down every session cluster.
+TimeoutStopSec=180
+
+# ---- sandbox ---------------------------------------------------------------------------------
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths={{ ckad_data_dir }} /run/user/{{ ckad_uid }}
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

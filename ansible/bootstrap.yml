@@ -1,0 +1,41 @@
+---
+# Phase 1 - run ONCE, as root, before site.yml:
+#   ansible-playbook bootstrap.yml
+# Creates the admin account and PROVES that key-based login works, so that site.yml
+# can safely disable root and password logins without locking you out.
+- name: Bootstrap the admin user
+  hosts: ckad
+  tasks:
+    - name: Install sudo
+      ansible.builtin.apt:
+        name: [sudo, acl]
+        state: present
+        update_cache: true
+
+    - name: Create the admin user
+      ansible.builtin.user:
+        name: "{{ ckad_admin_user }}"
+        shell: /bin/bash
+        create_home: true
+
+    - name: Authorize your SSH key for the admin user
+      ansible.posix.authorized_key:
+        user: "{{ ckad_admin_user }}"
+        key: "{{ lookup('file', ckad_admin_pubkey_file) }}"
+        exclusive: true
+
+    - name: Passwordless sudo for the admin user
+      ansible.builtin.copy:
+        dest: "/etc/sudoers.d/90-{{ ckad_admin_user }}"
+        content: "{{ ckad_admin_user }} ALL=(ALL) NOPASSWD:ALL\n"
+        mode: "0440"
+        validate: visudo -cf %s
+
+    - name: Prove that key-only login as the admin user works (aborts here if it does not)
+      ansible.builtin.command: >-
+        ssh -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new
+        -o PreferredAuthentications=publickey
+        {{ ckad_admin_user }}@{{ ansible_host | default(inventory_hostname) }} true
+      delegate_to: localhost
+      become: false
+      changed_when: false

@@ -1,0 +1,14 @@
+---
+- name: Reload systemd
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: Reload egress
+  ansible.builtin.systemd:
+    name: ckad-egress
+    state: reloaded
+
+- name: Restart ckad-lab
+  ansible.builtin.systemd:
+    name: ckad-lab
+    state: restarted

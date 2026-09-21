@@ -1,0 +1,58 @@
+---
+# Phase 2 - hardening + deployment, as the admin user (root login is disabled by this run):
+#   ansible-playbook site.yml -e @vault.yml --ask-vault-pass
+- name: Harden the server and deploy CKAD Lab
+  hosts: ckad
+  become: true
+  vars:
+    ansible_user: "{{ ckad_admin_user }}"
+  pre_tasks:
+    - name: Refuse to run without a strong basic-auth password
+      ansible.builtin.assert:
+        that:
+          - ckad_basic_auth_password is defined
+          - ckad_basic_auth_password | length >= 12
+          - ckad_basic_auth_password != 'change-me-to-a-long-random-string'
+        fail_msg: "Set vault_ckad_basic_auth_password (12+ characters) in vault.yml - see vault.example.yml"
+      no_log: true
+  roles:
+    - base
+    - rootless_docker
+    - ckad_lab
+    - nginx
+  post_tasks:
+    - name: Without credentials the site answers 401
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ ckad_http_port }}/"
+        headers: {Host: "{{ ckad_server_names[0] }}"}
+        status_code: 401
+    - name: With credentials the site answers 200
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ ckad_http_port }}/api/catalog"
+        headers: {Host: "{{ ckad_server_names[0] }}"}
+        url_username: "{{ ckad_basic_auth_user }}"
+        url_password: "{{ ckad_basic_auth_password }}"
+        force_basic_auth: true
+        status_code: 200
+      no_log: true
+    - name: The auto-generated API docs are not exposed
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ ckad_http_port }}/docs"
+        headers: {Host: "{{ ckad_server_names[0] }}"}
+        url_username: "{{ ckad_basic_auth_user }}"
+        url_password: "{{ ckad_basic_auth_password }}"
+        force_basic_auth: true
+        status_code: 404
+      no_log: true
+    - name: The application itself listens on loopback only
+      ansible.builtin.command: ss -Hltn 'sport = :8000'
+      register: app_listen
+      changed_when: false
+      failed_when: "'127.0.0.1:8000' not in app_listen.stdout or '0.0.0.0:8000' in app_listen.stdout or '*:8000' in app_listen.stdout"
+    - name: Show the firewall
+      ansible.builtin.command: ufw status verbose
+      register: ufw_status
+      changed_when: false
+    - name: Print the firewall rules
+      ansible.builtin.debug:
+        var: ufw_status.stdout_lines

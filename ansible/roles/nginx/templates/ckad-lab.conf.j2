@@ -1,0 +1,75 @@
+# Managed by Ansible
+server_tokens off;
+limit_req_status 429;
+limit_req_zone $binary_remote_addr zone=ckad_api:10m rate=10r/s;
+limit_req_zone $binary_remote_addr zone=ckad_create:10m rate=6r/m;
+limit_conn_zone $binary_remote_addr zone=ckad_conn:10m;
+
+map $http_upgrade $ckad_connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
+# Anything that is not our hostname (scanners hitting the bare IP, wrong Host headers): no answer.
+server {
+    listen {{ ckad_http_port }} default_server;
+    listen [::]:{{ ckad_http_port }} default_server;
+    server_name _;
+    return 444;
+}
+
+server {
+    listen {{ ckad_http_port }};
+    listen [::]:{{ ckad_http_port }};
+    server_name {{ ckad_server_names | join(' ') }};
+
+    client_max_body_size 16k;
+    client_body_timeout 10s;
+    client_header_timeout 10s;
+    keepalive_timeout 30s;
+
+    add_header X-Content-Type-Options nosniff always;
+    add_header X-Frame-Options DENY always;
+    add_header Referrer-Policy no-referrer always;
+
+{% for cidr in ckad_allowed_cidrs %}
+    allow {{ cidr }};
+{% endfor %}
+{% if ckad_allowed_cidrs | length > 0 %}
+    deny all;
+{% endif %}
+    satisfy all;
+    auth_basic "CKAD Lab";
+    auth_basic_user_file /etc/nginx/ckad-lab.htpasswd;
+
+    # FastAPI's generated docs are not needed by the UI; do not advertise the API surface.
+    location ~ ^/(docs|redoc|openapi\.json) {
+        return 404;
+    }
+
+    # Creating a session provisions a Kubernetes cluster: allow very few per client.
+    location = /api/sessions {
+        limit_req zone=ckad_create burst=2 nodelay;
+        limit_except POST { deny all; }
+        include /etc/nginx/ckad-proxy.conf;
+    }
+
+    location /api/ {
+        limit_req zone=ckad_api burst=30 nodelay;
+        limit_except GET POST DELETE { deny all; }
+        include /etc/nginx/ckad-proxy.conf;
+    }
+
+    location /ws/terminal/ {
+        limit_conn ckad_conn 5;
+        proxy_read_timeout 3h;
+        proxy_send_timeout 3h;
+        proxy_buffering off;
+        include /etc/nginx/ckad-proxy.conf;
+    }
+
+    location / {
+        limit_except GET HEAD { deny all; }
+        include /etc/nginx/ckad-proxy.conf;
+    }
+}

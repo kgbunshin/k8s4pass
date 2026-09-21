@@ -1,0 +1,136 @@
+---
+- name: Install base packages
+  ansible.builtin.apt:
+    name: [ufw, fail2ban, python3-systemd, unattended-upgrades, nftables, acl, rsync, curl,
+           ca-certificates, python3-venv, python3-pip, python3-debian]
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Automatic security updates
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+    mode: "0644"
+
+# ---- SSH: key only, one account -------------------------------------------------------------
+# The cloud-init drop-in (50-cloud-init.conf) turns PasswordAuthentication back on, and sshd uses
+# the FIRST value it reads, so ours must sort before it (00-).
+- name: Harden sshd (validated, and removed again if sshd rejects it)
+  block:
+    - name: Write the sshd hardening drop-in
+      ansible.builtin.template:
+        src: sshd-hardening.conf.j2
+        dest: /etc/ssh/sshd_config.d/00-ckad-hardening.conf
+        mode: "0644"
+      notify: Reload sshd
+    - name: Check the sshd configuration
+      ansible.builtin.command: sshd -t
+      changed_when: false
+  rescue:
+    - name: Remove the rejected drop-in
+      ansible.builtin.file:
+        path: /etc/ssh/sshd_config.d/00-ckad-hardening.conf
+        state: absent
+    - name: Stop here
+      ansible.builtin.fail:
+        msg: "sshd rejected the hardening configuration; it was removed and nothing was changed."
+
+# ---- kernel / network hardening -----------------------------------------------------------
+- name: Kernel and network hardening (sysctl)
+  ansible.builtin.copy:
+    dest: /etc/sysctl.d/90-ckad-hardening.conf
+    mode: "0644"
+    content: |
+      net.ipv4.conf.all.rp_filter = 1
+      net.ipv4.conf.default.rp_filter = 1
+      net.ipv4.conf.all.accept_redirects = 0
+      net.ipv4.conf.default.accept_redirects = 0
+      net.ipv6.conf.all.accept_redirects = 0
+      net.ipv6.conf.default.accept_redirects = 0
+      net.ipv4.conf.all.send_redirects = 0
+      net.ipv4.conf.all.log_martians = 1
+      net.ipv4.tcp_syncookies = 1
+      kernel.kptr_restrict = 2
+      kernel.dmesg_restrict = 1
+      kernel.unprivileged_bpf_disabled = 1
+      net.core.bpf_jit_harden = 2
+      fs.protected_hardlinks = 1
+      fs.protected_symlinks = 1
+      fs.suid_dumpable = 0
+  notify: Reload sysctl
+
+- name: Stop answering LLMNR / mDNS (systemd-resolved listens on 5355 by default)
+  ansible.builtin.copy:
+    dest: /etc/systemd/resolved.conf.d/ckad.conf
+    mode: "0644"
+    content: |
+      [Resolve]
+      LLMNR=no
+      MulticastDNS=no
+  notify: Restart resolved
+
+# ---- firewall: deny everything inbound except SSH and the web port ----------------------------
+- name: Allow SSH (rate limited)
+  community.general.ufw:
+    rule: limit
+    port: "{{ ssh_port }}"
+    proto: tcp
+    from_ip: "{{ item }}"
+  loop: "{{ ssh_allowed_cidrs if ssh_allowed_cidrs | length > 0 else ['any'] }}"
+
+- name: Allow the web port
+  community.general.ufw:
+    rule: allow
+    port: "{{ ckad_http_port }}"
+    proto: tcp
+    from_ip: "{{ item }}"
+  loop: "{{ ckad_allowed_cidrs if ckad_allowed_cidrs | length > 0 else ['any'] }}"
+
+- name: Default deny incoming
+  community.general.ufw:
+    default: deny
+    direction: incoming
+
+- name: Default allow outgoing (the ckad user is filtered separately)
+  community.general.ufw:
+    default: allow
+    direction: outgoing
+
+- name: Enable the firewall
+  community.general.ufw:
+    state: enabled
+    logging: "low"
+
+# ---- brute-force protection ------------------------------------------------------------
+- name: Fail2ban jails (sshd and nginx basic auth)
+  ansible.builtin.copy:
+    dest: /etc/fail2ban/jail.d/ckad.local
+    mode: "0644"
+    content: |
+      [DEFAULT]
+      bantime = 1h
+      findtime = 10m
+      maxretry = 5
+
+      [sshd]
+      enabled = true
+      backend = systemd
+      maxretry = 3
+
+      [nginx-http-auth]
+      enabled = true
+      port = http
+      logpath = /var/log/nginx/error.log
+  notify: Restart fail2ban
+
+- name: Enable fail2ban
+  ansible.builtin.systemd:
+    name: fail2ban
+    enabled: true
+    state: started
+
+- name: Apply pending handlers now (sshd, sysctl, resolved) before continuing
+  ansible.builtin.meta: flush_handlers

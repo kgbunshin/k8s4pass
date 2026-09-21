@@ -2,3 +2,7 @@
 __pycache__/
 .kubeconfig
 data/
+ansible/inventory.ini
+ansible/vault.yml
+ansible/.vault_pass
+*.retry
