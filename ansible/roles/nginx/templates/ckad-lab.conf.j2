@@ -1,5 +1,6 @@
 # Managed by Ansible
-server_tokens off;
+# server_tokens off; already set in the stock nginx.conf on Debian; setting it twice in the
+# same (http) context is a hard error, not an override.
 limit_req_status 429;
 limit_req_zone $binary_remote_addr zone=ckad_api:10m rate=10r/s;
 limit_req_zone $binary_remote_addr zone=ckad_create:10m rate=6r/m;

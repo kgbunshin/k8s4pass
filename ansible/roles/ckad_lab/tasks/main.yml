@@ -72,6 +72,7 @@
     group: root
     mode: "u=rwX,go=rX"
     recurse: true
+    follow: false  # on a rerun the data/ symlink already exists; without this it chowns its TARGET (ckad_data_dir) to root too
 
 - name: Data/ points at the writable directory
   ansible.builtin.file:

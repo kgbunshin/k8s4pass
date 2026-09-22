@@ -3,6 +3,7 @@
   ansible.builtin.apt:
     name: [nginx, python3-passlib]
     state: present
+    install_recommends: false
 
 - name: Remove the default site (it would also claim default_server)
   ansible.builtin.file:

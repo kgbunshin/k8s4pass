@@ -25,7 +25,7 @@
     name: docker
     types: [deb]
     uris: https://download.docker.com/linux/debian
-    suites: ["{{ ansible_distribution_release }}"]
+    suites: ["{{ ansible_facts['distribution_release'] }}"]
     components: [stable]
     architectures: [amd64]
     signed_by: https://download.docker.com/linux/debian/gpg
@@ -37,6 +37,7 @@
            slirp4netns, fuse-overlayfs, iptables, kmod]
     state: present
     update_cache: true
+    install_recommends: false
 
 - name: Disable the rootful daemon so only the rootless one exists
   ansible.builtin.systemd:
@@ -52,6 +53,12 @@
     state: present
     persistent: present
   loop: [ip_tables, ip6_tables, iptable_nat, ip6table_nat]
+
+- name: Ensure /etc/systemd/system/user@.service.d exists
+  ansible.builtin.file:
+    path: /etc/systemd/system/user@.service.d
+    state: directory
+    mode: "0755"
 
 - name: Delegate cgroup controllers to user sessions (memory/cpu/pids limits for rootless containers)
   ansible.builtin.template:

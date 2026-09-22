@@ -32,10 +32,14 @@
         validate: visudo -cf %s
 
     - name: Prove that key-only login as the admin user works (aborts here if it does not)
+      # Note the hostvars[inventory_hostname] indirection: with delegate_to, the plain
+      # ansible_host/ansible_port magic vars resolve to the DELEGATED host's (localhost's)
+      # connection facts, not this play's host, unless looked up this way.
       ansible.builtin.command: >-
         ssh -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new
         -o PreferredAuthentications=publickey
-        {{ ckad_admin_user }}@{{ ansible_host | default(inventory_hostname) }} true
+        -p {{ hostvars[inventory_hostname].ansible_port | default(22) }}
+        {{ ckad_admin_user }}@{{ hostvars[inventory_hostname].ansible_host | default(inventory_hostname) }} true
       delegate_to: localhost
       become: false
       changed_when: false
