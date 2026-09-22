@@ -143,6 +143,7 @@
         enterExam(s);
         break;
       case "finished":
+        banner(""); // clears any "already grading" notice left over from a lost race with the reaper
         if (s.alive) enterExam(s); // review window: the environment and the terminal keep running
         else showResult(s);
         break;
@@ -408,7 +409,14 @@
     try {
       render(await api(`/api/sessions/${sid}/finish`, { method: "POST" }));
     } catch (e) {
-      banner("Failed to grade: " + e.message);
+      if (e.status === 409) {
+        // Lost a race with the reaper (it grades automatically once the clock runs out): grading
+        // is already happening, not failing. Poll now instead of waiting for the result to show up.
+        banner("Grading was already starting (the timer may have just run out) — fetching the result…");
+        poll();
+      } else {
+        banner("Failed to grade: " + e.message);
+      }
     } finally {
       btn.disabled = false;
       btn.classList.remove("confirm");
